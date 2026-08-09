@@ -112,3 +112,17 @@ test("keeps starter preview code out and includes the product integration files"
     access(new URL(".env.example", projectRoot)),
   ]);
 });
+
+test("keeps the Vercel Next.js deployment contract", async () => {
+  const [packageSource, vercelSource] = await Promise.all([
+    readFile(new URL("package.json", projectRoot), "utf8"),
+    readFile(new URL("vercel.json", projectRoot), "utf8"),
+  ]);
+  const packageJson = JSON.parse(packageSource);
+  const vercelJson = JSON.parse(vercelSource);
+
+  assert.match(packageJson.dependencies?.next ?? "", /\S/);
+  assert.equal(packageJson.scripts?.["build:vercel"], "next build");
+  assert.equal(vercelJson.framework, "nextjs");
+  assert.equal(vercelJson.buildCommand, "npm run build:vercel");
+});
