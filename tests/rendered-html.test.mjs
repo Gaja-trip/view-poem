@@ -4,13 +4,13 @@ import test from "node:test";
 
 const projectRoot = new URL("../", import.meta.url);
 
-async function renderHomePage() {
+async function renderPath(pathname) {
   const workerUrl = new URL("../dist/server/index.js", import.meta.url);
   workerUrl.searchParams.set("test", `${process.pid}-${Date.now()}`);
   const { default: worker } = await import(workerUrl.href);
 
   return worker.fetch(
-    new Request("http://localhost/", {
+    new Request(new URL(pathname, "http://localhost"), {
       headers: { accept: "text/html" },
     }),
     {
@@ -25,36 +25,69 @@ async function renderHomePage() {
   );
 }
 
-test("server-renders the Korean landscape poem studio", async () => {
-  const response = await renderHomePage();
+async function renderHtml(pathname) {
+  const response = await renderPath(pathname);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
+  return response.text();
+}
 
-  const html = await response.text();
-  assert.match(html, /<html[^>]*\blang=["']ko["'][^>]*>/i);
-  assert.match(
-    html,
-    /<title>풍경시(?:<!-- -->)? — 오늘 본 풍경을,(?:<!-- -->)? 한 편의 시로<\/title>/i,
-  );
-  assert.match(html, /오늘 본 풍경을,/);
-  assert.match(html, /한 편의 시로\./);
-  assert.match(html, /사진과 그 순간의 마음을 남기면 풍경을 스케치하고,/);
-
-  assert.match(html, /사진 찍기 또는 선택하기/);
-  assert.match(html, /한 단어의 감정도 충분해요/);
-  assert.match(html, /ChatGPT 이미지 보관하기/);
-  assert.match(html, /Google Drive 보관/);
-  assert.match(
-    html,
-    /https:\/\/drive\.google\.com\/drive\/folders\/1THA5WVItE6BFJKsOX3It7dHZQErrqc8s/,
-  );
-
+function assertNoStarterPreview(html) {
   assert.doesNotMatch(html, /codex-preview/i);
   assert.doesNotMatch(
     html,
     /Building your site|Your site is taking shape|sites-skeleton|SkeletonPreview/i,
   );
   assert.doesNotMatch(html, /react-loading-skeleton/i);
+}
+
+test("server-renders the Korean product home with links to both workflows", async () => {
+  const html = await renderHtml("/");
+  assert.match(html, /<html[^>]*\blang=["']ko["'][^>]*>/i);
+  assert.match(
+    html,
+    /<title>풍경시(?:<!-- -->)? — 오늘 본 풍경을,(?:<!-- -->)? 나만의 방식으로<\/title>/i,
+  );
+  assert.match(html, /오늘 본 풍경을,/);
+  assert.match(html, /나만의 방식으로\./);
+  assert.match(
+    html,
+    /사진과 마음으로 새로운 풍경시를 만들거나, 이미 만든 ChatGPT 이미지를 Google Drive에 보관하세요\. 두 작업은 각각 독립된 페이지에서 열립니다\./,
+  );
+  assert.match(
+    html,
+    /<a\b[^>]*\bhref=["']\/create["'][^>]*>[\s\S]*?새 풍경시 만들기[\s\S]*?<\/a>/i,
+  );
+  assert.match(
+    html,
+    /<a\b[^>]*\bhref=["']\/archive["'][^>]*>[\s\S]*?ChatGPT 이미지 보관하기[\s\S]*?<\/a>/i,
+  );
+  assert.match(html, /Google Drive 보관/);
+  assert.match(
+    html,
+    /https:\/\/drive\.google\.com\/drive\/folders\/1THA5WVItE6BFJKsOX3It7dHZQErrqc8s/,
+  );
+  assertNoStarterPreview(html);
+});
+
+test("server-renders only the poem creation workflow at /create", async () => {
+  const html = await renderHtml("/create");
+  assert.match(html, /사진 찍기 또는 선택하기/);
+  assert.match(html, /3단계 중 1단계 풍경/);
+  assert.match(html, /이 풍경으로 계속하기/);
+  assert.doesNotMatch(html, /ChatGPT에서 내려받은 이미지를 선택하면/);
+  assert.doesNotMatch(html, /KEEP AN IMAGE/);
+  assertNoStarterPreview(html);
+});
+
+test("server-renders only the image archive workflow at /archive", async () => {
+  const html = await renderHtml("/archive");
+  assert.match(html, /ChatGPT에서 내려받은 이미지를 선택하면/);
+  assert.match(html, /이미지 고르기/);
+  assert.match(html, /Google Drive에 저장/);
+  assert.doesNotMatch(html, /사진 찍기 또는 선택하기/);
+  assert.doesNotMatch(html, /3단계 중 1단계 풍경/);
+  assertNoStarterPreview(html);
 });
 
 test("keeps starter preview code out and includes the product integration files", async () => {

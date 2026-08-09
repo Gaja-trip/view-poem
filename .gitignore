@@ -42,3 +42,5 @@ yarn-error.log*
 /outputs/
 /work/
 /app/_sites-preview/
+/.openai/package-stage-*/
+/.openai/site-version-*.tar.gz

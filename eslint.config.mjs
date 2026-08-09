@@ -16,6 +16,7 @@ const eslintConfig = defineConfig([
     "app/_sites-preview/**",
     "work/**",
     ".npm-cache/**",
+    ".openai/package-stage-*/**",
     "next-env.d.ts",
   ]),
   eslint.configs.recommended,

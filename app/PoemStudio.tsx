@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import Link from "next/link";
 import Script from "next/script";
 import {
   useEffect,
@@ -9,7 +10,6 @@ import {
   useState,
   type ChangeEvent,
   type DragEvent,
-  type KeyboardEvent,
 } from "react";
 
 type Mode = "create" | "import";
@@ -586,11 +586,11 @@ async function pickGoogleFolder(config: PublicConfig["googleDrive"], token: stri
   });
 }
 
-async function verifyDriveFolder(folderId: string, token: string) {
+async function verifyDriveFolder(folderId: string, token: string, signal: AbortSignal) {
   const fields = encodeURIComponent("id,name,mimeType,capabilities(canAddChildren)");
   const response = await fetch(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(folderId)}?supportsAllDrives=true&fields=${fields}`,
-    { headers: { Authorization: `Bearer ${token}` } },
+    { headers: { Authorization: `Bearer ${token}` }, signal },
   );
   if (!response.ok) throw new Error("이 폴더는 앱에서 아직 선택되지 않았어요.");
   const folder = (await response.json()) as {
@@ -610,6 +610,7 @@ async function uploadToDrive(
   fileName: string,
   folderId: string,
   token: string,
+  signal: AbortSignal,
 ) {
   const boundary = `view-poem-${crypto.randomUUID()}`;
   const metadata = JSON.stringify({
@@ -636,14 +637,14 @@ async function uploadToDrive(
         "Content-Type": `multipart/related; boundary=${boundary}`,
       },
       body,
+      signal,
     },
   );
   if (!response.ok) throw new Error("Google Drive에 파일을 저장하지 못했어요.");
   return (await response.json()) as { id: string; name: string; webViewLink?: string };
 }
 
-export default function PoemStudio() {
-  const [mode, setMode] = useState<Mode>("create");
+export default function PoemStudio({ mode }: { mode: Mode }) {
   const [step, setStep] = useState<Step>(1);
   const [photo, setPhoto] = useState<File | null>(null);
   const [importedImage, setImportedImage] = useState<File | null>(null);
@@ -669,6 +670,7 @@ export default function PoemStudio() {
   const studioRef = useRef<HTMLElement>(null);
   const generationIdRef = useRef(0);
   const generationAbortRef = useRef<AbortController | null>(null);
+  const driveAbortRef = useRef<AbortController | null>(null);
   const googleTokenRef = useRef<{ token: string; expiresAt: number } | null>(null);
 
   const photoUrl = useObjectUrl(photo);
@@ -701,6 +703,7 @@ export default function PoemStudio() {
   useEffect(
     () => () => {
       generationAbortRef.current?.abort();
+      driveAbortRef.current?.abort();
     },
     [],
   );
@@ -715,29 +718,6 @@ export default function PoemStudio() {
 
   function scrollToStudio() {
     window.requestAnimationFrame(() => studioRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }
-
-  function chooseMode(nextMode: Mode) {
-    if (isGenerating) return;
-    setMode(nextMode);
-    setError("");
-    setDriveMessage("");
-    scrollToStudio();
-  }
-
-  function handleModeTabKey(event: KeyboardEvent<HTMLButtonElement>, currentMode: Mode) {
-    let nextMode: Mode | null = null;
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      nextMode = currentMode === "create" ? "import" : "create";
-    } else if (event.key === "Home") {
-      nextMode = "create";
-    } else if (event.key === "End") {
-      nextMode = "import";
-    }
-    if (!nextMode) return;
-    event.preventDefault();
-    chooseMode(nextMode);
-    window.requestAnimationFrame(() => document.getElementById(`${nextMode}-tab`)?.focus());
   }
 
   function selectPhoto(file: File | undefined, target: Mode) {
@@ -811,14 +791,6 @@ export default function PoemStudio() {
     }
   }
 
-  function useImportedForPoem() {
-    if (!importedImage) return;
-    setPhoto(importedImage);
-    setMode("create");
-    setStep(2);
-    setError("");
-  }
-
   function resetCreateFlow() {
     generationAbortRef.current?.abort();
     generationIdRef.current += 1;
@@ -859,36 +831,53 @@ export default function PoemStudio() {
     setDriveState("connecting");
     setDriveMessage("Google 계정을 연결하고 있어요.");
     setDriveFileUrl("");
+    driveAbortRef.current?.abort();
+    const controller = new AbortController();
+    driveAbortRef.current = controller;
     try {
       const cachedToken = googleTokenRef.current;
       const tokenRecord =
         cachedToken && cachedToken.expiresAt > Date.now() + 60_000
           ? cachedToken
           : await getGoogleAccessToken(driveConfig.clientId, cachedToken ? "" : "consent");
+      if (controller.signal.aborted) return;
       googleTokenRef.current = tokenRecord;
       const token = tokenRecord.token;
       let folderName = "";
       try {
-        folderName = await verifyDriveFolder(driveConfig.folderId, token);
+        folderName = await verifyDriveFolder(driveConfig.folderId, token, controller.signal);
       } catch {
+        if (controller.signal.aborted) return;
         const selectedFolder = await pickGoogleFolder(driveConfig, token);
+        if (controller.signal.aborted) return;
         if (selectedFolder.id !== driveConfig.folderId) {
           throw new Error("처음에 알려주신 Google Drive 폴더를 선택해 주세요.");
         }
-        folderName = await verifyDriveFolder(driveConfig.folderId, token);
+        folderName = await verifyDriveFolder(driveConfig.folderId, token, controller.signal);
       }
 
+      if (controller.signal.aborted) return;
       setDriveState("saving");
       setDriveMessage(`${folderName}에 저장하고 있어요.`);
-      const uploaded = await uploadToDrive(blob, fileName, driveConfig.folderId, token);
+      const uploaded = await uploadToDrive(
+        blob,
+        fileName,
+        driveConfig.folderId,
+        token,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
       setDriveState("saved");
       setDriveMessage(`Google Drive에 ‘${uploaded.name}’을 저장했어요.`);
       setDriveFileUrl(uploaded.webViewLink || driveConfig.folderUrl);
     } catch (driveError) {
+      if (controller.signal.aborted) return;
       setDriveState("error");
       setDriveMessage(
         driveError instanceof Error ? driveError.message : "Google Drive 저장을 마치지 못했어요.",
       );
+    } finally {
+      if (driveAbortRef.current === controller) driveAbortRef.current = null;
     }
   }
 
@@ -925,38 +914,39 @@ export default function PoemStudio() {
       />
 
       <header className="site-header">
-        <a className="brand" href="#top" aria-label="풍경시 홈">
+        <Link className="brand" href="/" aria-label="풍경시 홈">
           <span className="brand-mark" aria-hidden="true">風</span>
           <span>
             <strong>풍경시</strong>
             <small>VIEW · FEEL · VERSE</small>
           </span>
-        </a>
-        <button className="header-action" type="button" disabled={isGenerating} onClick={() => chooseMode("create")}>
-          작품 만들기 <span aria-hidden="true">↘</span>
-        </button>
+        </Link>
+        <Link className="header-action" href={mode === "create" ? "/archive" : "/create"}>
+          {mode === "create" ? "이미지 보관" : "새 풍경시"} <span aria-hidden="true">↘</span>
+        </Link>
       </header>
 
       <main id="top">
         <section className="hero" aria-labelledby="hero-title">
           <div className="hero-copy">
-            <p className="eyebrow"><span aria-hidden="true">✦</span> 산책자의 작은 시집</p>
+            <p className="eyebrow"><span aria-hidden="true">✦</span> {mode === "create" ? "산책자의 작은 시집" : "이미지 보관함"}</p>
             <h1 id="hero-title">
-              오늘 본 풍경을,
+              {mode === "create" ? "오늘 본 풍경을," : "마음에 든 이미지를,"}
               <br />
-              <em>한 편의 시로.</em>
+              <em>{mode === "create" ? "한 편의 시로." : "오래 간직해요."}</em>
             </h1>
             <p className="hero-description">
-              사진과 그 순간의 마음을 남기면 풍경을 스케치하고,
-              당신만의 언어로 한 편의 시를 엮어드려요.
+              {mode === "create"
+                ? "사진과 그 순간의 마음을 남기면 풍경을 스케치하고, 당신만의 언어로 한 편의 시를 엮어드려요."
+                : "ChatGPT에서 내려받은 이미지를 선택해 지정한 Google Drive 폴더에 안전하게 보관하세요."}
             </p>
             <div className="hero-actions">
-              <button className="button button-primary button-large" type="button" disabled={isGenerating} onClick={() => chooseMode("create")}>
-                새 풍경시 만들기 <span aria-hidden="true">↘</span>
+              <button className="button button-primary button-large" type="button" disabled={isGenerating} onClick={scrollToStudio}>
+                {mode === "create" ? "풍경시 만들기 시작" : "이미지 보관 시작"} <span aria-hidden="true">↘</span>
               </button>
-              <button className="button button-quiet button-large" type="button" disabled={isGenerating} onClick={() => chooseMode("import")}>
-                ChatGPT 이미지 보관하기
-              </button>
+              <Link className="button button-quiet button-large" href={mode === "create" ? "/archive" : "/create"}>
+                {mode === "create" ? "ChatGPT 이미지 보관하기" : "새 풍경시 만들기"}
+              </Link>
             </div>
             <ul className="hero-notes" aria-label="주요 기능">
               <li>사진은 저장하지 않아요</li>
@@ -975,55 +965,38 @@ export default function PoemStudio() {
                 sizes="(max-width: 900px) 92vw, 48vw"
               />
             </div>
-            <p className="cover-caption"><span>01</span> 사진 속 장면은 스케치가 되고<br />마음은 시의 첫 문장이 됩니다.</p>
+            <p className="cover-caption"><span>01</span> {mode === "create" ? <>사진 속 장면은 스케치가 되고<br />마음은 시의 첫 문장이 됩니다.</> : <>좋아하는 이미지를 골라<br />나만의 Drive에 보관합니다.</>}</p>
           </div>
         </section>
 
         <section className="studio-section" id="studio" ref={studioRef} aria-labelledby="studio-title">
           <div className="section-intro">
-            <p className="eyebrow"><span aria-hidden="true">✦</span> 나의 풍경 기록</p>
-            <h2 id="studio-title">한 장의 사진에서 시작해요.</h2>
-            <p>지금 사진을 찍어도, 앨범 속 장면을 골라도 좋아요.</p>
+            <p className="eyebrow"><span aria-hidden="true">✦</span> {mode === "create" ? "나의 풍경 기록" : "나의 이미지 보관"}</p>
+            <h2 id="studio-title">{mode === "create" ? "한 장의 사진에서 시작해요." : "간직할 이미지를 골라주세요."}</h2>
+            <p>{mode === "create" ? "지금 사진을 찍어도, 앨범 속 장면을 골라도 좋아요." : "ChatGPT에서 내려받은 JPG, PNG, WEBP 이미지를 선택할 수 있어요."}</p>
           </div>
 
           <div className="studio-shell">
-            <div className="mode-tabs" role="tablist" aria-label="작업 선택">
-              <button
-                id="create-tab"
-                type="button"
-                role="tab"
-                aria-selected={mode === "create"}
-                aria-controls="create-panel"
-                tabIndex={mode === "create" ? 0 : -1}
-                disabled={isGenerating}
+            <nav className="mode-tabs" aria-label="작업 페이지">
+              <Link
+                href="/create"
+                aria-current={mode === "create" ? "page" : undefined}
                 className={mode === "create" ? "mode-tab active" : "mode-tab"}
-                onClick={() => chooseMode("create")}
-                onKeyDown={(event) => handleModeTabKey(event, "create")}
               >
                 새 풍경시
-              </button>
-              <button
-                id="import-tab"
-                type="button"
-                role="tab"
-                aria-selected={mode === "import"}
-                aria-controls="import-panel"
-                tabIndex={mode === "import" ? 0 : -1}
-                disabled={isGenerating}
+              </Link>
+              <Link
+                href="/archive"
+                aria-current={mode === "import" ? "page" : undefined}
                 className={mode === "import" ? "mode-tab active" : "mode-tab"}
-                onClick={() => chooseMode("import")}
-                onKeyDown={(event) => handleModeTabKey(event, "import")}
               >
                 이미지 보관
-              </button>
-            </div>
+              </Link>
+            </nav>
 
             {mode === "create" ? (
               <div
                 className="flow-panel"
-                role="tabpanel"
-                id="create-panel"
-                aria-labelledby="create-tab"
                 aria-busy={isGenerating}
               >
                 <div className="progress-row" aria-label={`3단계 중 ${step}단계 ${createStepLabel}`}>
@@ -1238,9 +1211,6 @@ export default function PoemStudio() {
             ) : (
               <div
                 className="flow-panel import-panel"
-                role="tabpanel"
-                id="import-panel"
-                aria-labelledby="import-tab"
               >
                 <div className="import-copy">
                   <p className="step-number">KEEP AN IMAGE</p>
@@ -1285,9 +1255,9 @@ export default function PoemStudio() {
                   >
                     {driveState === "connecting" || driveState === "saving" ? "Google Drive 저장 중…" : "Google Drive에 저장"}
                   </button>
-                  <button className="button button-secondary button-full" type="button" disabled={!importedImage} onClick={useImportedForPoem}>
-                    이 이미지로 시 만들기
-                  </button>
+                  <Link className="button button-secondary button-full" href="/create">
+                    새 풍경시 페이지 열기
+                  </Link>
                 </div>
               </div>
             )}
@@ -1321,7 +1291,7 @@ export default function PoemStudio() {
       </main>
 
       <footer>
-        <div className="brand footer-brand"><span className="brand-mark" aria-hidden="true">風</span><span><strong>풍경시</strong><small>VIEW · FEEL · VERSE</small></span></div>
+        <Link className="brand footer-brand" href="/"><span className="brand-mark" aria-hidden="true">風</span><span><strong>풍경시</strong><small>VIEW · FEEL · VERSE</small></span></Link>
         <p>오늘 만난 장면을 내일의 문장으로.</p>
         <a href={folderUrl} target="_blank" rel="noreferrer">Google Drive 폴더 ↗</a>
       </footer>
