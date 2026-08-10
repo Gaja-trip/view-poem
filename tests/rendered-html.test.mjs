@@ -41,17 +41,13 @@ function assertNoStarterPreview(html) {
   assert.doesNotMatch(html, /react-loading-skeleton/i);
 }
 
-test("server-renders the Korean product home with links to both workflows", async () => {
+test("server-renders the image-led home with only the two workflow menu links", async () => {
   const html = await renderHtml("/");
   assert.match(html, /<html[^>]*\blang=["']ko["'][^>]*>/i);
   assert.match(
     html,
     /<title>풍경시(?:<!-- -->)? — 산책자의 작은 시집<\/title>/i,
   );
-  assert.match(html, /산책자의 작은 시집/);
-  assert.match(html, /두 개의 기록 방식/);
-  assert.match(html, /풍경을 시로/);
-  assert.match(html, /이미지를 보관함에/);
   assert.match(
     html,
     /<a\b[^>]*\bhref=["']\/create["'][^>]*>[\s\S]*?새 풍경시 만들기[\s\S]*?<\/a>/i,
@@ -60,7 +56,9 @@ test("server-renders the Korean product home with links to both workflows", asyn
     html,
     /<a\b[^>]*\bhref=["']\/archive["'][^>]*>[\s\S]*?ChatGPT 이미지 보관하기[\s\S]*?<\/a>/i,
   );
-  assert.match(html, /ChatGPT 이미지를 Google Drive에 오래 간직해요\./);
+  assert.doesNotMatch(html, /class=["'][^"']*landing-content/);
+  assert.doesNotMatch(html, /<h1\b/i);
+  assert.doesNotMatch(html, /두 개의 기록 방식/);
   assertNoStarterPreview(html);
 });
 
