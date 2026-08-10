@@ -44,3 +44,9 @@ yarn-error.log*
 /app/_sites-preview/
 /.openai/package-stage-*/
 /.openai/site-version-*.tar.gz
+/.android-toolchain/
+/android-app/.gradle/
+/android-app/build/
+/android-app/app/build/
+/android-app/keystore.properties
+/android-app/*.jks
