@@ -46,14 +46,12 @@ test("server-renders the Korean product home with links to both workflows", asyn
   assert.match(html, /<html[^>]*\blang=["']ko["'][^>]*>/i);
   assert.match(
     html,
-    /<title>풍경시(?:<!-- -->)? — 오늘 본 풍경을,(?:<!-- -->)? 나만의 방식으로<\/title>/i,
+    /<title>풍경시(?:<!-- -->)? — 산책자의 작은 시집<\/title>/i,
   );
-  assert.match(html, /오늘 본 풍경을,/);
-  assert.match(html, /나만의 방식으로\./);
-  assert.match(
-    html,
-    /사진과 마음으로 새로운 풍경시를 만들거나, 이미 만든 ChatGPT 이미지를 Google Drive에 보관하세요\. 두 작업은 각각 독립된 페이지에서 열립니다\./,
-  );
+  assert.match(html, /산책자의 작은 시집/);
+  assert.match(html, /두 개의 기록 방식/);
+  assert.match(html, /풍경을 시로/);
+  assert.match(html, /이미지를 보관함에/);
   assert.match(
     html,
     /<a\b[^>]*\bhref=["']\/create["'][^>]*>[\s\S]*?새 풍경시 만들기[\s\S]*?<\/a>/i,
@@ -62,11 +60,7 @@ test("server-renders the Korean product home with links to both workflows", asyn
     html,
     /<a\b[^>]*\bhref=["']\/archive["'][^>]*>[\s\S]*?ChatGPT 이미지 보관하기[\s\S]*?<\/a>/i,
   );
-  assert.match(html, /Google Drive 보관/);
-  assert.match(
-    html,
-    /https:\/\/drive\.google\.com\/drive\/folders\/1THA5WVItE6BFJKsOX3It7dHZQErrqc8s/,
-  );
+  assert.match(html, /ChatGPT 이미지를 Google Drive에 오래 간직해요\./);
   assertNoStarterPreview(html);
 });
 

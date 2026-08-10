@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const title = "풍경시 — 오늘 본 풍경을, 나만의 방식으로";
+const title = "풍경시 — 산책자의 작은 시집";
 const description =
-  "풍경 사진과 마음으로 시를 만들거나 ChatGPT 이미지를 Google Drive에 보관하세요.";
+  "산책에서 만난 풍경을 시로 만들고, 오래 간직하고 싶은 이미지를 보관하는 두 가지 기록 방식.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const headerStore = await headers();
