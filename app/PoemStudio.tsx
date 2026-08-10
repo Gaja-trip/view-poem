@@ -667,7 +667,6 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   const [driveState, setDriveState] = useState<"idle" | "connecting" | "saving" | "saved" | "error">("idle");
   const [driveMessage, setDriveMessage] = useState("");
   const [driveFileUrl, setDriveFileUrl] = useState("");
-  const studioRef = useRef<HTMLElement>(null);
   const generationIdRef = useRef(0);
   const generationAbortRef = useRef<AbortController | null>(null);
   const driveAbortRef = useRef<AbortController | null>(null);
@@ -715,10 +714,6 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
     }, 2_400);
     return () => window.clearInterval(timer);
   }, [isGenerating]);
-
-  function scrollToStudio() {
-    window.requestAnimationFrame(() => studioRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }
 
   function selectPhoto(file: File | undefined, target: Mode) {
     if (!file) return;
@@ -921,79 +916,20 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
             <small>VIEW · FEEL · VERSE</small>
           </span>
         </Link>
-        <Link className="header-action" href={mode === "create" ? "/archive" : "/create"}>
-          {mode === "create" ? "이미지 보관" : "새 풍경시"} <span aria-hidden="true">↘</span>
+        <Link className="header-action" href="/">
+          홈으로 <span aria-hidden="true">↖</span>
         </Link>
       </header>
 
-      <main id="top">
-        <section className="hero" aria-labelledby="hero-title">
-          <div className="hero-copy">
-            <p className="eyebrow"><span aria-hidden="true">✦</span> {mode === "create" ? "산책자의 작은 시집" : "이미지 보관함"}</p>
-            <h1 id="hero-title">
-              {mode === "create" ? "오늘 본 풍경을," : "마음에 든 이미지를,"}
-              <br />
-              <em>{mode === "create" ? "한 편의 시로." : "오래 간직해요."}</em>
-            </h1>
-            <p className="hero-description">
-              {mode === "create"
-                ? "사진과 그 순간의 마음을 남기면 풍경을 스케치하고, 당신만의 언어로 한 편의 시를 엮어드려요."
-                : "ChatGPT에서 내려받은 이미지를 선택해 지정한 Google Drive 폴더에 안전하게 보관하세요."}
-            </p>
-            <div className="hero-actions">
-              <button className="button button-primary button-large" type="button" disabled={isGenerating} onClick={scrollToStudio}>
-                {mode === "create" ? "풍경시 만들기 시작" : "이미지 보관 시작"} <span aria-hidden="true">↘</span>
-              </button>
-              <Link className="button button-quiet button-large" href={mode === "create" ? "/archive" : "/create"}>
-                {mode === "create" ? "ChatGPT 이미지 보관하기" : "새 풍경시 만들기"}
-              </Link>
-            </div>
-            <ul className="hero-notes" aria-label="주요 기능">
-              <li>사진은 저장하지 않아요</li>
-              <li>JPG · PNG · WEBP</li>
-              <li>Google Drive 보관</li>
-            </ul>
-          </div>
-
-          <div className="hero-visual" aria-label="풍경시 스케치북 표지 예시">
-            <div className="hero-image-wrap">
-              <Image
-                src="/og.png"
-                alt="산길과 억새가 연필과 수채로 그려진 풍경시 스케치북"
-                fill
-                priority
-                sizes="(max-width: 900px) 92vw, 48vw"
-              />
-            </div>
-            <p className="cover-caption"><span>01</span> {mode === "create" ? <>사진 속 장면은 스케치가 되고<br />마음은 시의 첫 문장이 됩니다.</> : <>좋아하는 이미지를 골라<br />나만의 Drive에 보관합니다.</>}</p>
-          </div>
-        </section>
-
-        <section className="studio-section" id="studio" ref={studioRef} aria-labelledby="studio-title">
+      <main id="top" className="single-workflow-main">
+        <section className="studio-section" id="studio" aria-labelledby="studio-title">
           <div className="section-intro">
-            <p className="eyebrow"><span aria-hidden="true">✦</span> {mode === "create" ? "나의 풍경 기록" : "나의 이미지 보관"}</p>
+            <p className="eyebrow"><span aria-hidden="true">✦</span> {mode === "create" ? "풍경시 만들기" : "이미지 보관하기"}</p>
             <h2 id="studio-title">{mode === "create" ? "한 장의 사진에서 시작해요." : "간직할 이미지를 골라주세요."}</h2>
-            <p>{mode === "create" ? "지금 사진을 찍어도, 앨범 속 장면을 골라도 좋아요." : "ChatGPT에서 내려받은 JPG, PNG, WEBP 이미지를 선택할 수 있어요."}</p>
+            <p>{mode === "create" ? "지금 사진을 찍어도, 앨범 속 장면을 골라도 좋아요." : "보관할 JPG, PNG, WEBP 이미지를 선택할 수 있어요."}</p>
           </div>
 
           <div className="studio-shell">
-            <nav className="mode-tabs" aria-label="작업 페이지">
-              <Link
-                href="/create"
-                aria-current={mode === "create" ? "page" : undefined}
-                className={mode === "create" ? "mode-tab active" : "mode-tab"}
-              >
-                새 풍경시
-              </Link>
-              <Link
-                href="/archive"
-                aria-current={mode === "import" ? "page" : undefined}
-                className={mode === "import" ? "mode-tab active" : "mode-tab"}
-              >
-                이미지 보관
-              </Link>
-            </nav>
-
             {mode === "create" ? (
               <div
                 className="flow-panel"
@@ -1214,8 +1150,8 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
               >
                 <div className="import-copy">
                   <p className="step-number">KEEP AN IMAGE</p>
-                  <h3>이미 만들어 둔<br />이미지가 있나요?</h3>
-                  <p>ChatGPT에서 내려받은 이미지를 선택하면 지정한 Google Drive 폴더에 그대로 보관해요.</p>
+                  <h3>간직하고 싶은<br />이미지가 있나요?</h3>
+                  <p>이미지를 선택하면 지정한 Google Drive 폴더에 그대로 보관해요.</p>
                 </div>
                 <div className="import-content">
                   <label
@@ -1237,7 +1173,7 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                       <span className="upload-placeholder">
                         <span className="upload-symbol" aria-hidden="true">⌁</span>
                         <strong>이미지 고르기</strong>
-                        <small>ChatGPT에서 받은 이미지도 좋아요</small>
+                        <small>JPG · PNG · WEBP · 최대 10MB</small>
                       </span>
                     )}
                   </label>
@@ -1255,9 +1191,6 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                   >
                     {driveState === "connecting" || driveState === "saving" ? "Google Drive 저장 중…" : "Google Drive에 저장"}
                   </button>
-                  <Link className="button button-secondary button-full" href="/create">
-                    새 풍경시 페이지 열기
-                  </Link>
                 </div>
               </div>
             )}
@@ -1276,25 +1209,7 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
             </div>
           </div>
         </section>
-
-        <section className="process-section" aria-labelledby="process-title">
-          <div className="process-heading">
-            <p className="eyebrow"><span aria-hidden="true">✦</span> 만드는 방식</p>
-            <h2 id="process-title">풍경은 그대로,<br />느낌은 더 선명하게.</h2>
-          </div>
-          <ol className="process-list">
-            <li><span>01</span><strong>풍경을 담고</strong><p>사진은 작품을 만드는 동안만 사용하고 별도로 보관하지 않아요.</p></li>
-            <li><span>02</span><strong>마음을 적고</strong><p>한 단어의 감정도 충분해요. 당신의 문장을 시어로 다듬어요.</p></li>
-            <li><span>03</span><strong>오래 간직해요</strong><p>완성 작품과 스케치를 내려받거나 Google Drive에 보관하세요.</p></li>
-          </ol>
-        </section>
       </main>
-
-      <footer>
-        <Link className="brand footer-brand" href="/"><span className="brand-mark" aria-hidden="true">風</span><span><strong>풍경시</strong><small>VIEW · FEEL · VERSE</small></span></Link>
-        <p>오늘 만난 장면을 내일의 문장으로.</p>
-        <a href={folderUrl} target="_blank" rel="noreferrer">Google Drive 폴더 ↗</a>
-      </footer>
     </>
   );
 }

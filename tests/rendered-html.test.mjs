@@ -54,7 +54,7 @@ test("server-renders the image-led home with only the two workflow menu links", 
   );
   assert.match(
     html,
-    /<a\b[^>]*\bhref=["']\/archive["'][^>]*>[\s\S]*?ChatGPT 이미지 보관하기[\s\S]*?<\/a>/i,
+    /<a\b[^>]*\bhref=["']\/archive["'][^>]*>[\s\S]*?이미지 보관하기[\s\S]*?<\/a>/i,
   );
   assert.doesNotMatch(html, /class=["'][^"']*landing-content/);
   assert.doesNotMatch(html, /<h1\b/i);
@@ -67,18 +67,23 @@ test("server-renders only the poem creation workflow at /create", async () => {
   assert.match(html, /사진 찍기 또는 선택하기/);
   assert.match(html, /3단계 중 1단계 풍경/);
   assert.match(html, /이 풍경으로 계속하기/);
-  assert.doesNotMatch(html, /ChatGPT에서 내려받은 이미지를 선택하면/);
+  assert.doesNotMatch(html, /이미지를 선택하면 지정한 Google Drive 폴더에 그대로 보관해요/);
   assert.doesNotMatch(html, /KEEP AN IMAGE/);
+  assert.doesNotMatch(html, /href=["']\/archive["']/i);
+  assert.doesNotMatch(html, /class=["'][^"']*mode-tabs/);
   assertNoStarterPreview(html);
 });
 
 test("server-renders only the image archive workflow at /archive", async () => {
   const html = await renderHtml("/archive");
-  assert.match(html, /ChatGPT에서 내려받은 이미지를 선택하면/);
+  assert.match(html, /이미지를 선택하면 지정한 Google Drive 폴더에 그대로 보관해요/);
   assert.match(html, /이미지 고르기/);
   assert.match(html, /Google Drive에 저장/);
   assert.doesNotMatch(html, /사진 찍기 또는 선택하기/);
   assert.doesNotMatch(html, /3단계 중 1단계 풍경/);
+  assert.doesNotMatch(html, /href=["']\/create["']/i);
+  assert.doesNotMatch(html, /새 풍경시 페이지 열기/);
+  assert.doesNotMatch(html, /class=["'][^"']*mode-tabs/);
   assertNoStarterPreview(html);
 });
 

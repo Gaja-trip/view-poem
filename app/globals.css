@@ -445,6 +445,11 @@ main {
   scroll-margin-top: 12px;
 }
 
+.single-workflow-main .studio-section {
+  min-height: calc(100svh - 85px);
+  padding-top: clamp(52px, 7vw, 96px);
+}
+
 .studio-section::after {
   position: absolute;
   top: 0;

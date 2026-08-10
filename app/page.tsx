@@ -35,9 +35,9 @@ export default function Home() {
           <Link
             className="landing-menu-link"
             href="/archive"
-            aria-label="ChatGPT 이미지 보관하기"
+            aria-label="이미지 보관하기"
           >
-            <span className="menu-label-full">ChatGPT 이미지 보관하기</span>
+            <span className="menu-label-full">이미지 보관하기</span>
             <span className="menu-label-short" aria-hidden="true">이미지 보관</span>
             <span aria-hidden="true">↗</span>
           </Link>
