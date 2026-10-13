@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">풍경시</string>
+    <string name="app_name">풍경을 담다</string>
+    <string name="save_sketch_drive">스케치를 Google Drive에 저장</string>
+    <string name="sketch_color">스케치 색감</string>
+    <string name="color_percent">색감 %1$d%%</string>
 </resources>
