@@ -25,6 +25,8 @@ import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -50,6 +52,8 @@ public final class MainActivity extends Activity {
     private static final String STATE_SOURCE_NAME = "source_name";
     private static final String STATE_COLOR_STRENGTH = "color_strength";
     private static final String STATE_RENDERED_COLOR_STRENGTH = "rendered_color_strength";
+    private static final String STATE_STYLE = "sketch_style";
+    private static final String STATE_RENDERED_STYLE = "rendered_sketch_style";
 
     private static final int PAPER = Color.rgb(244, 241, 232);
     private static final int INK = Color.rgb(38, 43, 38);
@@ -58,8 +62,6 @@ public final class MainActivity extends Activity {
     private static final int MUTED = Color.rgb(101, 108, 99);
     private static final int MAX_SKETCH_EDGE = 900;
     private static final int DEFAULT_COLOR_STRENGTH = 70;
-    private static final float COLOR_SATURATION = 0.82f;
-    private static final float LINE_STRENGTH = 0.92f;
 
     private final ExecutorService imageExecutor = Executors.newSingleThreadExecutor();
 
@@ -68,6 +70,9 @@ public final class MainActivity extends Activity {
     private TextView statusText;
     private TextView colorValueText;
     private SeekBar colorSeekBar;
+    private RadioGroup styleChoices;
+    private RadioButton pencilChoice;
+    private RadioButton watercolorChoice;
     private Button captureButton;
     private Button galleryButton;
     private Button saveButton;
@@ -78,6 +83,9 @@ public final class MainActivity extends Activity {
     private String currentSourceName;
     private int colorStrengthPercent = DEFAULT_COLOR_STRENGTH;
     private int renderedColorStrength = DEFAULT_COLOR_STRENGTH;
+    private SketchRenderer.Style currentStyle = SketchRenderer.Style.WATERCOLOR;
+    private SketchRenderer.Style renderedStyle = SketchRenderer.Style.WATERCOLOR;
+    private boolean restoringControls;
     private volatile int activeJob;
 
     @Override
@@ -101,11 +109,21 @@ public final class MainActivity extends Activity {
             renderedColorStrength = savedInstanceState.getInt(
                     STATE_RENDERED_COLOR_STRENGTH,
                     colorStrengthPercent);
+            currentStyle = parseStyle(savedInstanceState.getString(STATE_STYLE));
+            renderedStyle = parseStyle(savedInstanceState.getString(STATE_RENDERED_STYLE));
+            restoringControls = true;
             colorSeekBar.setProgress(colorStrengthPercent);
+            styleChoices.check(currentStyle == SketchRenderer.Style.PENCIL
+                    ? pencilChoice.getId() : watercolorChoice.getId());
+            restoringControls = false;
             updateColorValue(colorStrengthPercent);
         }
 
-        if (currentSketchUri != null) {
+        if (currentSourceUri != null && currentSketchUri != null
+                && (currentStyle != renderedStyle || colorStrengthPercent != renderedColorStrength)) {
+            startSketchJob(currentSourceUri, currentSourceName,
+                    currentSketchUri, currentSketchName, colorStrengthPercent);
+        } else if (currentSketchUri != null) {
             loadExistingSketch(currentSketchUri);
         } else if (currentSourceUri != null) {
             startSketchJob(currentSourceUri, currentSourceName, null, null, colorStrengthPercent);
@@ -137,7 +155,7 @@ public final class MainActivity extends Activity {
         root.addView(title, titleParams);
 
         TextView subtitle = new TextView(this);
-        subtitle.setText("풍경을 촬영하거나 불러와 수채화빛 연필 스케치로 간직하세요.");
+        subtitle.setText("풍경을 촬영하거나 불러와 종이 위의 연필화와 수채화로 간직하세요.");
         subtitle.setTextColor(MUTED);
         subtitle.setTextSize(15);
         subtitle.setLineSpacing(dp(3), 1f);
@@ -158,8 +176,8 @@ public final class MainActivity extends Activity {
         root.addView(photoFrame, photoParams);
 
         previewImage = new ImageView(this);
-        previewImage.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        previewImage.setContentDescription("완성된 풍경 컬러 연필 스케치");
+        previewImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        previewImage.setContentDescription("완성된 풍경 스케치");
         previewImage.setVisibility(View.GONE);
         photoFrame.addView(previewImage, matchParentFrame());
 
@@ -178,11 +196,30 @@ public final class MainActivity extends Activity {
         statusText.setGravity(Gravity.CENTER);
         root.addView(statusText, matchWidthWrap());
 
+        styleChoices = new RadioGroup(this);
+        styleChoices.setOrientation(RadioGroup.HORIZONTAL);
+        pencilChoice = createStyleChoice("연필 스케치");
+        watercolorChoice = createStyleChoice("수채 스케치");
+        styleChoices.addView(pencilChoice, new RadioGroup.LayoutParams(0, dp(44), 1f));
+        styleChoices.addView(watercolorChoice, new RadioGroup.LayoutParams(0, dp(44), 1f));
+        styleChoices.check(watercolorChoice.getId());
+        styleChoices.setOnCheckedChangeListener((group, checkedId) -> {
+            currentStyle = checkedId == pencilChoice.getId()
+                    ? SketchRenderer.Style.PENCIL : SketchRenderer.Style.WATERCOLOR;
+            if (!restoringControls) {
+                if (currentSourceUri != null) rebuildCurrentSketchIfNeeded();
+                else setReadyState(false);
+            }
+        });
+        LinearLayout.LayoutParams styleParams = matchWidthWrap();
+        styleParams.topMargin = dp(6);
+        root.addView(styleChoices, styleParams);
+
         LinearLayout colorLabelRow = new LinearLayout(this);
         colorLabelRow.setOrientation(LinearLayout.HORIZONTAL);
         colorLabelRow.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams colorLabelParams = matchWidthWrap();
-        colorLabelParams.topMargin = dp(10);
+        colorLabelParams.topMargin = dp(2);
         root.addView(colorLabelRow, colorLabelParams);
 
         TextView colorLabel = new TextView(this);
@@ -377,8 +414,8 @@ public final class MainActivity extends Activity {
 
     private void rebuildCurrentSketchIfNeeded() {
         if (currentSourceUri == null
-                || currentSketchUri == null
-                || colorStrengthPercent == renderedColorStrength) {
+                || (currentSketchUri != null && currentStyle == renderedStyle
+                && colorStrengthPercent == renderedColorStrength)) {
             return;
         }
         startSketchJob(
@@ -395,13 +432,17 @@ public final class MainActivity extends Activity {
             Uri replaceUri,
             String replaceName,
             int colorStrength) {
-        int job = beginBusyState("풍경을 컬러 연필 스케치로 바꾸고 있습니다…");
+        SketchRenderer.Style style = currentStyle;
+        int job = beginBusyState(style == SketchRenderer.Style.PENCIL
+                ? "풍경을 연필 스케치로 그리고 있습니다…"
+                : "풍경을 수채 스케치로 그리고 있습니다…");
         imageExecutor.execute(() -> buildAndPublishSketch(
                 job,
                 sourceUri,
                 nameHint,
                 replaceUri,
                 replaceName,
+                style,
                 colorStrength));
     }
 
@@ -411,9 +452,9 @@ public final class MainActivity extends Activity {
             String nameHint,
             Uri replaceUri,
             String replaceName,
+            SketchRenderer.Style style,
             int colorStrength) {
         Bitmap source = null;
-        Bitmap pencilSketch = null;
         Bitmap colorSketch = null;
         Uri outputUri = null;
         boolean createdNewFile = false;
@@ -425,24 +466,12 @@ public final class MainActivity extends Activity {
                 return;
             }
 
-            postStatus(job, "풍경의 선과 수채화빛 색감을 그리고 있습니다…");
-            pencilSketch = createPencilSketch(source);
-            if (job != activeJob || Thread.currentThread().isInterrupted()) {
-                source.recycle();
-                pencilSketch.recycle();
-                return;
-            }
-
-            colorSketch = colorizePencilSketch(
-                    source,
-                    pencilSketch,
-                    colorStrength / 100f,
-                    COLOR_SATURATION,
-                    LINE_STRENGTH);
+            postStatus(job, style == SketchRenderer.Style.PENCIL || colorStrength == 0
+                    ? "연필선과 명암을 종이 위에 그리고 있습니다…"
+                    : "풍경의 선과 수채화빛 색감을 그리고 있습니다…");
+            colorSketch = renderSketchBitmap(source, style, colorStrength);
             source.recycle();
             source = null;
-            pencilSketch.recycle();
-            pencilSketch = null;
             if (job != activeJob || Thread.currentThread().isInterrupted()) {
                 colorSketch.recycle();
                 return;
@@ -478,10 +507,11 @@ public final class MainActivity extends Activity {
                 currentSketchUri = finishedUri;
                 currentSketchName = sketchName;
                 renderedColorStrength = colorStrength;
+                renderedStyle = style;
                 previewImage.setImageBitmap(finishedSketch);
                 previewImage.setVisibility(View.VISIBLE);
                 previewPlaceholder.setVisibility(View.GONE);
-                statusText.setText(colorStrength == 0
+                statusText.setText(style == SketchRenderer.Style.PENCIL || colorStrength == 0
                         ? "흑백 연필 스케치가 완성되었습니다."
                         : "수채화빛 컬러 스케치가 완성되었습니다.");
                 statusText.setTextColor(PINE);
@@ -490,7 +520,6 @@ public final class MainActivity extends Activity {
             colorSketch = null;
         } catch (IOException | RuntimeException | OutOfMemoryError error) {
             recycleBitmap(source);
-            recycleBitmap(pencilSketch);
             recycleBitmap(colorSketch);
             if (createdNewFile && outputUri != null) {
                 getContentResolver().delete(outputUri, null, null);
@@ -560,154 +589,14 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private Bitmap createPencilSketch(Bitmap source) {
+    private Bitmap renderSketchBitmap(
+            Bitmap source, SketchRenderer.Style style, int colorStrength) {
         int width = source.getWidth();
         int height = source.getHeight();
-        int pixelCount = width * height;
-
-        int[] pixels = new int[pixelCount];
-        int[] gray = new int[pixelCount];
-        int[] inverted = new int[pixelCount];
-        int[] horizontalBlur = new int[pixelCount];
-        int[] blurred = new int[pixelCount];
-        source.getPixels(pixels, 0, width, 0, 0, width, height);
-
-        for (int index = 0; index < pixelCount; index++) {
-            int color = pixels[index];
-            int tone = (77 * Color.red(color)
-                    + 150 * Color.green(color)
-                    + 29 * Color.blue(color)) >> 8;
-            gray[index] = tone;
-            inverted[index] = 255 - tone;
-        }
-
-        int radius = Math.max(5, Math.min(14, Math.min(width, height) / 70));
-        boxBlur(inverted, horizontalBlur, blurred, width, height, radius);
-
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                int index = y * width + x;
-                int denominator = 255 - blurred[index];
-                int tone = denominator <= 2
-                        ? 255
-                        : Math.min(255, (gray[index] * 255) / denominator);
-
-                if (x > 0 && x < width - 1 && y > 0 && y < height - 1) {
-                    int edge = Math.abs(gray[index] - gray[index - 1])
-                            + Math.abs(gray[index] - gray[index + 1])
-                            + Math.abs(gray[index] - gray[index - width])
-                            + Math.abs(gray[index] - gray[index + width]);
-                    int edgeTone = 255 - Math.min(190, edge * 2);
-                    tone = Math.min(tone, edgeTone);
-                }
-
-                tone = Math.max(0, Math.min(255, tone));
-                pixels[index] = Color.rgb(tone, tone, tone);
-            }
-        }
-
-        return Bitmap.createBitmap(pixels, width, height, Bitmap.Config.ARGB_8888);
-    }
-
-    private Bitmap colorizePencilSketch(
-            Bitmap original,
-            Bitmap pencilSketch,
-            float colorStrength,
-            float saturation,
-            float lineStrength) {
-        if (original.getWidth() != pencilSketch.getWidth()
-                || original.getHeight() != pencilSketch.getHeight()) {
-            throw new IllegalArgumentException("Sketch dimensions do not match");
-        }
-
-        float strength = clamp01(colorStrength);
-        if (strength == 0f) {
-            Bitmap blackAndWhite = pencilSketch.copy(Bitmap.Config.ARGB_8888, false);
-            if (blackAndWhite == null) throw new OutOfMemoryError("Sketch copy failed");
-            return blackAndWhite;
-        }
-
-        float adjustedSaturation = clamp01(saturation);
-        float adjustedLineStrength = clamp01(lineStrength);
-        int width = original.getWidth();
-        int height = original.getHeight();
-        int pixelCount = width * height;
-        int[] colorPixels = new int[pixelCount];
-        int[] linePixels = new int[pixelCount];
-        original.getPixels(colorPixels, 0, width, 0, 0, width, height);
-        pencilSketch.getPixels(linePixels, 0, width, 0, 0, width, height);
-
-        for (int index = 0; index < pixelCount; index++) {
-            int originalColor = colorPixels[index];
-            int red = Color.red(originalColor);
-            int green = Color.green(originalColor);
-            int blue = Color.blue(originalColor);
-            int gray = (77 * red + 150 * green + 29 * blue) >> 8;
-
-            red = clamp255(Math.round(gray + (red - gray) * adjustedSaturation));
-            green = clamp255(Math.round(gray + (green - gray) * adjustedSaturation));
-            blue = clamp255(Math.round(gray + (blue - gray) * adjustedSaturation));
-
-            red = 255 - Math.round((255 - red) * strength);
-            green = 255 - Math.round((255 - green) * strength);
-            blue = 255 - Math.round((255 - blue) * strength);
-
-            int pencilValue = Color.red(linePixels[index]);
-            int lineValue = 255 - Math.round(
-                    (255 - pencilValue) * adjustedLineStrength);
-            red = clamp255((red * lineValue + 127) / 255);
-            green = clamp255((green * lineValue + 127) / 255);
-            blue = clamp255((blue * lineValue + 127) / 255);
-
-            colorPixels[index] = Color.argb(
-                    Color.alpha(originalColor),
-                    red,
-                    green,
-                    blue);
-        }
-
-        return Bitmap.createBitmap(
-                colorPixels,
-                width,
-                height,
-                Bitmap.Config.ARGB_8888);
-    }
-
-    private static void boxBlur(
-            int[] source,
-            int[] horizontal,
-            int[] output,
-            int width,
-            int height,
-            int radius) {
-        int window = radius * 2 + 1;
-
-        for (int y = 0; y < height; y++) {
-            int row = y * width;
-            int sum = 0;
-            for (int offset = -radius; offset <= radius; offset++) {
-                sum += source[row + clamp(offset, 0, width - 1)];
-            }
-            for (int x = 0; x < width; x++) {
-                horizontal[row + x] = sum / window;
-                int remove = clamp(x - radius, 0, width - 1);
-                int add = clamp(x + radius + 1, 0, width - 1);
-                sum += source[row + add] - source[row + remove];
-            }
-        }
-
-        for (int x = 0; x < width; x++) {
-            int sum = 0;
-            for (int offset = -radius; offset <= radius; offset++) {
-                sum += horizontal[clamp(offset, 0, height - 1) * width + x];
-            }
-            for (int y = 0; y < height; y++) {
-                output[y * width + x] = sum / window;
-                int remove = clamp(y - radius, 0, height - 1);
-                int add = clamp(y + radius + 1, 0, height - 1);
-                sum += horizontal[add * width + x] - horizontal[remove * width + x];
-            }
-        }
+        int[] original = new int[width * height];
+        source.getPixels(original, 0, width, 0, 0, width, height);
+        int[] rendered = SketchRenderer.render(original, width, height, style, colorStrength);
+        return Bitmap.createBitmap(rendered, width, height, Bitmap.Config.ARGB_8888);
     }
 
     private Uri saveSketchToPictures(Bitmap sketch, String fileName) throws IOException {
@@ -803,7 +692,7 @@ public final class MainActivity extends Activity {
                     previewImage.setImageBitmap(bitmap);
                     previewImage.setVisibility(View.VISIBLE);
                     previewPlaceholder.setVisibility(View.GONE);
-                    statusText.setText(renderedColorStrength == 0
+                    statusText.setText(renderedStyle == SketchRenderer.Style.PENCIL || renderedColorStrength == 0
                             ? "흑백 연필 스케치가 준비되었습니다."
                             : "컬러 스케치가 준비되었습니다.");
                     statusText.setTextColor(PINE);
@@ -823,6 +712,8 @@ public final class MainActivity extends Activity {
         galleryButton.setEnabled(false);
         saveButton.setEnabled(false);
         colorSeekBar.setEnabled(false);
+        pencilChoice.setEnabled(false);
+        watercolorChoice.setEnabled(false);
         captureButton.setAlpha(0.5f);
         galleryButton.setAlpha(0.5f);
         saveButton.setAlpha(0.42f);
@@ -858,7 +749,10 @@ public final class MainActivity extends Activity {
         captureButton.setEnabled(true);
         galleryButton.setEnabled(true);
         saveButton.setEnabled(hasSketch);
-        boolean canAdjustColor = hasSketch && currentSourceUri != null;
+        pencilChoice.setEnabled(true);
+        watercolorChoice.setEnabled(true);
+        boolean canAdjustColor = hasSketch && currentSourceUri != null
+                && currentStyle == SketchRenderer.Style.WATERCOLOR;
         colorSeekBar.setEnabled(canAdjustColor);
         captureButton.setAlpha(1f);
         galleryButton.setAlpha(1f);
@@ -949,6 +843,8 @@ public final class MainActivity extends Activity {
         outState.putString(STATE_SOURCE_NAME, currentSourceName);
         outState.putInt(STATE_COLOR_STRENGTH, colorStrengthPercent);
         outState.putInt(STATE_RENDERED_COLOR_STRENGTH, renderedColorStrength);
+        outState.putString(STATE_STYLE, currentStyle.name());
+        outState.putString(STATE_RENDERED_STYLE, renderedStyle.name());
     }
 
     @Override
@@ -966,17 +862,10 @@ public final class MainActivity extends Activity {
         return value == null ? null : Uri.parse(value);
     }
 
-    private static int clamp(int value, int minimum, int maximum) {
-        return Math.max(minimum, Math.min(maximum, value));
+    private static SketchRenderer.Style parseStyle(String value) {
+        return "PENCIL".equals(value) ? SketchRenderer.Style.PENCIL : SketchRenderer.Style.WATERCOLOR;
     }
 
-    private static int clamp255(int value) {
-        return clamp(value, 0, 255);
-    }
-
-    private static float clamp01(float value) {
-        return Math.max(0f, Math.min(1f, value));
-    }
 
     private static void recycleBitmap(Bitmap bitmap) {
         if (bitmap != null && !bitmap.isRecycled()) bitmap.recycle();
@@ -984,6 +873,16 @@ public final class MainActivity extends Activity {
 
     private int dp(int value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private RadioButton createStyleChoice(String title) {
+        RadioButton choice = new RadioButton(this);
+        choice.setId(View.generateViewId());
+        choice.setText(title);
+        choice.setTextSize(14);
+        choice.setTextColor(PINE);
+        choice.setContentDescription(title);
+        return choice;
     }
 
     private static GradientDrawable roundedDrawable(

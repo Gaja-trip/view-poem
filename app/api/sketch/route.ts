@@ -7,6 +7,7 @@ import {
   DEFAULT_OPENAI_IMAGE_MODEL,
   getRuntimeEnv,
 } from "@/lib/runtime-env";
+import { buildSketchPrompt } from "@/lib/sketch-style";
 
 const OPENAI_IMAGE_EDITS_URL = "https://api.openai.com/v1/images/edits";
 
@@ -63,32 +64,6 @@ function extractImageBase64(payload: unknown): string | null {
   return null;
 }
 
-function sketchPrompt(feeling: string, poem: string, style: string): string {
-  const styleDescriptions: Record<string, string> = {
-    pencil: "섬세한 흑연 연필선과 부드러운 명암",
-    watercolor: "옅은 수채 연필의 번짐과 투명한 색",
-    ink: "절제된 먹선과 담백한 여백",
-    charcoal: "목탄의 거친 결, 깊은 명암과 번짐",
-  };
-  const requestedStyle =
-    styleDescriptions[style] ?? "섬세한 연필과 옅은 수채 연필";
-  const context = [
-    feeling ? `사진을 본 사람의 감정: ${feeling.slice(0, 800)}` : "",
-    poem ? `함께 놓일 시: ${poem.slice(0, 1_200)}` : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-
-  return [
-    "입력 사진의 풍경, 구도, 시점, 빛의 방향을 유지한 채 손으로 그린 풍경 스케치로 변환하세요.",
-    `표현 재료는 ${requestedStyle.slice(0, 80)} 느낌으로 하고, 따뜻한 미색 종이 위에 자연스러운 선과 여백을 살리세요.`,
-    "사진에 없는 사람, 건물, 글자, 서명, 테두리, 로고를 새로 만들지 마세요.",
-    "시가 읽힐 수 있도록 복잡한 질감은 절제하되, 원래 풍경을 알아볼 수 있는 핵심 형태와 계절감은 보존하세요.",
-    context,
-  ]
-    .filter(Boolean)
-    .join("\n");
-}
 
 async function createSketch(
   image: Awaited<ReturnType<typeof validateUploadedImage>>,
@@ -101,10 +76,11 @@ async function createSketch(
   body.append("image[]", canonicalImage, `landscape.${image.extension}`);
   body.append(
     "prompt",
-    sketchPrompt(
+    buildSketchPrompt(
       getText(formData, "feeling", "emotion", "note"),
       getText(formData, "poem"),
       getText(formData, "style"),
+      getText(formData, "colorStrength") === "" ? 70 : Number(getText(formData, "colorStrength")),
     ),
   );
   body.append("size", "auto");

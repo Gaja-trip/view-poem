@@ -3,6 +3,8 @@
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import { renderSketchInWorker } from "@/lib/sketch-client";
+import type { SketchStyle } from "@/lib/sketch-renderer";
 import {
   useEffect,
   useMemo,
@@ -14,7 +16,6 @@ import {
 
 type Mode = "create" | "import";
 type Step = 1 | 2 | 3;
-type SketchStyle = "pencil" | "watercolor" | "ink" | "charcoal";
 type PoemLength = "short" | "medium" | "long";
 
 type PoemResult = {
@@ -120,8 +121,8 @@ const GENERATION_MESSAGES = [
 const EMOTIONS = ["고요해요", "따뜻해요", "쓸쓸해요", "설레요", "벅차요", "그리워요"];
 
 const STYLE_LABELS: Record<SketchStyle, string> = {
-  pencil: "연필",
-  watercolor: "수채 연필",
+  pencil: "연필 스케치",
+  watercolor: "수채 스케치",
   ink: "먹선",
   charcoal: "목탄",
 };
@@ -153,12 +154,12 @@ function useObjectUrl(blob: Blob | null) {
   return url;
 }
 
-function blobFromCanvas(canvas: HTMLCanvasElement, type = "image/png") {
+function blobFromCanvas(canvas: HTMLCanvasElement, type = "image/png", quality?: number) {
   return new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((blob) => {
       if (blob) resolve(blob);
       else reject(new Error("이미지를 만들지 못했어요."));
-    }, type);
+    }, type, quality);
   });
 }
 
@@ -178,98 +179,73 @@ function loadImage(blob: Blob) {
   });
 }
 
-async function createLocalSketch(file: File, style: SketchStyle) {
-  const sourceImage = await loadImage(file);
-  const maxEdge = 1400;
-  const maxPixels = 1_600_000;
-  const sourcePixels = sourceImage.naturalWidth * sourceImage.naturalHeight;
-  const scale = Math.min(
-    1,
-    maxEdge / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight),
-    Math.sqrt(maxPixels / sourcePixels),
-  );
-  const width = Math.max(1, Math.round(sourceImage.naturalWidth * scale));
-  const height = Math.max(1, Math.round(sourceImage.naturalHeight * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("이 브라우저에서는 스케치를 만들 수 없어요.");
-  context.drawImage(sourceImage, 0, 0, width, height);
-
-  const imageData = context.getImageData(0, 0, width, height);
-  const pixels = imageData.data;
-  const gray = new Uint8Array(width * height);
-  for (let pixel = 0, index = 0; pixel < pixels.length; pixel += 4, index += 1) {
-    gray[index] = Math.round(
-      pixels[pixel] * 0.299 + pixels[pixel + 1] * 0.587 + pixels[pixel + 2] * 0.114,
-    );
-  }
-
-  const edgeStrength = style === "ink" ? 2.6 : style === "charcoal" ? 2.1 : 1.65;
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const index = y * width + x;
-      const pixel = index * 4;
-      const left = gray[y * width + Math.max(0, x - 1)];
-      const right = gray[y * width + Math.min(width - 1, x + 1)];
-      const up = gray[Math.max(0, y - 1) * width + x];
-      const down = gray[Math.min(height - 1, y + 1) * width + x];
-      const edge = Math.min(255, (Math.abs(right - left) + Math.abs(down - up)) * edgeStrength);
-      const shade = 250 - edge * 0.82 - (255 - gray[index]) * 0.1;
-
-      if (style === "watercolor") {
-        const wash = 0.3;
-        pixels[pixel] = Math.max(0, Math.min(255, shade * (1 - wash) + pixels[pixel] * wash + 8));
-        pixels[pixel + 1] = Math.max(
-          0,
-          Math.min(255, shade * (1 - wash) + pixels[pixel + 1] * wash + 6),
-        );
-        pixels[pixel + 2] = Math.max(
-          0,
-          Math.min(255, shade * (1 - wash) + pixels[pixel + 2] * wash),
-        );
-      } else {
-        const grain = style === "charcoal" ? ((x * 17 + y * 11) % 13) - 6 : 0;
-        const value = style === "ink" ? (shade < 205 ? shade * 0.72 : 252) : shade + grain;
-        pixels[pixel] = Math.max(0, Math.min(255, value + 5));
-        pixels[pixel + 1] = Math.max(0, Math.min(255, value + 3));
-        pixels[pixel + 2] = Math.max(0, Math.min(255, value - 3));
-      }
-      pixels[pixel + 3] = 255;
-    }
-  }
-
-  context.putImageData(imageData, 0, 0);
-  context.globalCompositeOperation = "multiply";
-  context.fillStyle = style === "watercolor" ? "rgba(239, 232, 211, .1)" : "rgba(230, 218, 188, .08)";
-  context.fillRect(0, 0, width, height);
-  context.globalCompositeOperation = "source-over";
-  const sketch = await blobFromCanvas(canvas);
-  canvas.width = 0;
-  canvas.height = 0;
-  sourceImage.src = "";
-  return sketch;
-}
-
-function roundedRect(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
+async function createLocalSketch(
+  file: File, style: SketchStyle, colorStrength: number, signal: AbortSignal,
 ) {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + safeRadius, y);
-  context.arcTo(x + width, y, x + width, y + height, safeRadius);
-  context.arcTo(x + width, y + height, x, y + height, safeRadius);
-  context.arcTo(x, y + height, x, y, safeRadius);
-  context.arcTo(x, y, x + width, y, safeRadius);
-  context.closePath();
+  signal.throwIfAborted();
+  const sourceImage = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  try {
+    signal.throwIfAborted();
+    const maxEdge = 1400, maxPixels = 1_600_000;
+    const scale = Math.min(1,
+      maxEdge / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight),
+      Math.sqrt(maxPixels / (sourceImage.naturalWidth * sourceImage.naturalHeight)),
+    );
+    const width = Math.max(1, Math.round(sourceImage.naturalWidth * scale));
+    const height = Math.max(1, Math.round(sourceImage.naturalHeight * scale));
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    if (!context) throw new Error("이 브라우저에서는 스케치를 만들 수 없어요.");
+    context.drawImage(sourceImage, 0, 0, width, height);
+    const original = context.getImageData(0, 0, width, height);
+    const pixels = await renderSketchInWorker(original, { style, colorStrength }, signal);
+    signal.throwIfAborted();
+    const rendered = context.createImageData(width, height);
+    rendered.data.set(pixels);
+    context.putImageData(rendered, 0, 0);
+    return await blobFromCanvas(canvas);
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+    sourceImage.src = "";
+  }
 }
+
+async function preparePhotoForRequest(file: File, signal: AbortSignal) {
+  const image = await loadImage(file);
+  const canvas = document.createElement("canvas");
+  try {
+    signal.throwIfAborted();
+    let scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight),
+      Math.sqrt(2_000_000 / (image.naturalWidth * image.naturalHeight)));
+    for (let attempt = 0; attempt < 8; attempt++) {
+      signal.throwIfAborted();
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("사진을 준비하지 못했어요.");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      for (const quality of [0.88, 0.76]) {
+        const compressed = await blobFromCanvas(canvas, "image/jpeg", quality);
+        signal.throwIfAborted();
+        if (compressed.size <= 700 * 1024) {
+          return new File([compressed], "landscape.jpg", { type: "image/jpeg" });
+        }
+      }
+      scale *= 0.78;
+    }
+    throw new Error("사진을 준비하지 못했어요. 조금 작은 사진으로 다시 시도해 주세요.");
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+    image.src = "";
+  }
+}
+
 
 function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
   const words = text.trim().split(/\s+/);
@@ -349,12 +325,12 @@ async function createArtworkBlob(
   const panelHeight = height * 0.82;
   const panelX = width > height ? width * 0.065 : width * 0.08;
   const panelY = height * 0.09;
-  roundedRect(context, panelX, panelY, panelWidth, panelHeight, width * 0.018);
-  context.fillStyle = "rgba(250, 247, 238, .9)";
-  context.fill();
-  context.strokeStyle = "rgba(52, 57, 49, .2)";
-  context.lineWidth = Math.max(1, width * 0.0012);
-  context.stroke();
+  const paperWash = context.createLinearGradient(0, 0, panelX + panelWidth * 1.2, 0);
+  paperWash.addColorStop(0, "rgba(251, 249, 243, .96)");
+  paperWash.addColorStop(0.55, "rgba(251, 249, 243, .86)");
+  paperWash.addColorStop(1, "rgba(251, 249, 243, 0)");
+  context.fillStyle = paperWash;
+  context.fillRect(0, 0, panelX + panelWidth * 1.2, height);
 
   const padding = panelWidth * 0.12;
   const titleSize = Math.max(30, Math.min(58, panelWidth * 0.09));
@@ -470,23 +446,25 @@ async function requestSketch(
   photo: File,
   feeling: string,
   style: SketchStyle,
+  colorStrength: number,
   signal: AbortSignal,
 ) {
   const form = new FormData();
   form.append("image", photo);
   form.append("feeling", feeling);
   form.append("style", style);
+  form.append("colorStrength", String(colorStrength));
   try {
     const response = await fetch("/api/sketch", { method: "POST", body: form, signal });
     if (response.ok && response.status !== 204 && response.headers.get("content-type")?.startsWith("image/")) {
-      return await response.blob();
+      return { blob: await response.blob(), source: "openai" as const };
     }
   } catch (error) {
     if (signal.aborted) throw error;
     // The local pencil filter below is the intentional offline recovery path.
   }
   if (signal.aborted) throw new DOMException("작품 만들기를 취소했어요.", "AbortError");
-  return createLocalSketch(photo, style);
+  return { blob: await createLocalSketch(photo, style, colorStrength, signal), source: "local" as const };
 }
 
 function getGoogleAccessToken(clientId: string, prompt: "consent" | "") {
@@ -651,7 +629,13 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   const [feeling, setFeeling] = useState("");
   const [emotion, setEmotion] = useState("");
   const [location, setLocation] = useState("");
-  const [style, setStyle] = useState<SketchStyle>("pencil");
+  const [style, setStyle] = useState<SketchStyle>("watercolor");
+  const [colorStrength, setColorStrength] = useState(70);
+  const [previewSketch, setPreviewSketch] = useState<Blob | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewError, setPreviewError] = useState("");
+  const [artworkRatio, setArtworkRatio] = useState(4 / 3);
+  const [sketchSource, setSketchSource] = useState<"openai" | "local">("local");
   const [length, setLength] = useState<PoemLength>("medium");
   const [result, setResult] = useState<PoemResult | null>(null);
   const [sketchBlob, setSketchBlob] = useState<Blob | null>(null);
@@ -671,10 +655,13 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   const generationAbortRef = useRef<AbortController | null>(null);
   const driveAbortRef = useRef<AbortController | null>(null);
   const googleTokenRef = useRef<{ token: string; expiresAt: number } | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   const photoUrl = useObjectUrl(photo);
   const importedImageUrl = useObjectUrl(importedImage);
   const sketchUrl = useObjectUrl(sketchBlob);
+  const previewSketchUrl = useObjectUrl(previewSketch);
+  const artworkUrl = useObjectUrl(artworkBlob);
   const googleScriptsReady = identityLoaded && pickerScriptLoaded;
 
   useEffect(() => {
@@ -708,6 +695,24 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   );
 
   useEffect(() => {
+    if (!photo || step !== 2 || isGenerating) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(async () => {
+      setPreviewBusy(true);
+      setPreviewError("");
+      try {
+        const blob = await createLocalSketch(photo, style, colorStrength, controller.signal);
+        if (!controller.signal.aborted) setPreviewSketch(blob);
+      } catch {
+        if (!controller.signal.aborted) setPreviewError("미리보기를 만들지 못했어요. 다른 사진을 선택해 주세요.");
+      } finally {
+        if (!controller.signal.aborted) setPreviewBusy(false);
+      }
+    }, 220);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [photo, style, colorStrength, step, isGenerating]);
+
+  useEffect(() => {
     if (!isGenerating) return;
     const timer = window.setInterval(() => {
       setGenerationIndex((current) => (current + 1) % GENERATION_MESSAGES.length);
@@ -725,6 +730,8 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
     setError("");
     if (target === "create") {
       setPhoto(file);
+      setPreviewSketch(null);
+      setPreviewError("");
       setResult(null);
       setSketchBlob(null);
       setArtworkBlob(null);
@@ -759,15 +766,17 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
     setGenerationIndex(0);
     setIsGenerating(true);
     try {
+      const requestPhoto = await preparePhotoForRequest(photo, controller.signal);
       const [nextPoem, nextSketch] = await Promise.all([
-        requestPoem(photo, feeling.trim(), emotion, location.trim(), length, controller.signal),
-        requestSketch(photo, feeling.trim() || emotion, style, controller.signal),
+        requestPoem(requestPhoto, feeling.trim(), emotion, location.trim(), length, controller.signal),
+        requestSketch(requestPhoto, feeling.trim() || emotion, style, colorStrength, controller.signal),
       ]);
       if (controller.signal.aborted || generationId !== generationIdRef.current) return;
-      const nextArtwork = await createArtworkBlob(nextSketch, nextPoem, location);
+      const nextArtwork = await createArtworkBlob(nextSketch.blob, nextPoem, location);
       if (controller.signal.aborted || generationId !== generationIdRef.current) return;
       setResult(nextPoem);
-      setSketchBlob(nextSketch);
+      setSketchBlob(nextSketch.blob);
+      setSketchSource(nextSketch.source);
       setArtworkBlob(nextArtwork);
       setShowOriginal(false);
       setStep(3);
@@ -792,6 +801,8 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
     setIsGenerating(false);
     setStep(1);
     setPhoto(null);
+    setPreviewSketch(null);
+    setPreviewError("");
     setFeeling("");
     setEmotion("");
     setLocation("");
@@ -979,6 +990,25 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                           </span>
                         )}
                       </label>
+                      <input
+                        ref={cameraInputRef}
+                        type="file"
+                        accept="image/*"
+                        capture="environment"
+                        hidden
+                        aria-label="카메라로 풍경 촬영"
+                        onChange={(event) => {
+                          selectPhoto(event.target.files?.[0], "create");
+                          event.target.value = "";
+                        }}
+                      />
+                      <button
+                        className="button button-secondary button-full camera-action"
+                        type="button"
+                        onClick={() => cameraInputRef.current?.click()}
+                      >
+                        풍경 촬영하기 <span aria-hidden="true">◎</span>
+                      </button>
                       <button
                         className="button button-primary button-full"
                         type="button"
@@ -1001,9 +1031,14 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                       <h3>그때 마음에<br />남은 것은?</h3>
                       <p>잘 쓰려고 애쓰지 않아도 괜찮아요. 한 단어면 충분해요.</p>
                       {photoUrl ? (
-                        <div className="small-photo">
-                          <Image src={photoUrl} alt="선택한 풍경 미리보기" fill unoptimized sizes="180px" />
-                        </div>
+                        <>
+                          <div className="sketch-preview" aria-busy={previewBusy}>
+                            <Image src={previewSketchUrl || photoUrl} alt={previewSketchUrl ? `${STYLE_LABELS[style]} 미리보기` : "선택한 풍경 미리보기"} fill unoptimized sizes="(max-width: 900px) 82vw, 360px" />
+                          </div>
+                          <p className="sketch-preview-caption" role="status">
+                            {previewError || (previewBusy ? "사진에 연필선과 종이 질감을 입히고 있어요…" : `스케치 미리보기 · ${STYLE_LABELS[style]}${style === "watercolor" ? ` · 색감 ${colorStrength}%` : ""}`)}
+                          </p>
+                        </>
                       ) : null}
                     </div>
                     <div className="step-content form-stack">
@@ -1071,6 +1106,22 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                           </div>
                         </fieldset>
                       </div>
+                      {style === "watercolor" ? (
+                        <div className="color-control">
+                          <label htmlFor="sketch-color-strength">스케치 색감</label>
+                          <output htmlFor="sketch-color-strength">{colorStrength}%</output>
+                          <input
+                            id="sketch-color-strength"
+                            type="range"
+                            min="0"
+                            max="100"
+                            step="1"
+                            value={colorStrength}
+                            onChange={(event) => setColorStrength(Number(event.target.value))}
+                          />
+                          <p>0%는 흑백 연필화, 높일수록 수채 색감이 선명해져요.</p>
+                        </div>
+                      ) : null}
                       <div className="button-row">
                         <button className="button button-secondary" type="button" onClick={() => setStep(1)}>이전</button>
                         <button
@@ -1092,21 +1143,25 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                       <p className="step-number">STEP 03</p>
                       <h3>당신의 풍경시가<br />완성됐어요.</h3>
                       <p>
-                        {result.source === "openai"
-                          ? "사진과 마음을 함께 읽어 만든 한 편이에요."
-                          : "지금은 기기 안에서 스케치하고 기본 시어로 엮었어요."}
+                        {sketchSource === "openai"
+                          ? "사진의 구도를 살려 AI가 연필선과 색감을 다시 그렸어요."
+                          : "사진의 구도를 살려 기기 안에서 연필선과 종이 질감을 입혔어요."}
                       </p>
                     </div>
                     <div className="artwork-card">
-                      <div className="artwork-image">
+                      <div className="artwork-image" style={{ aspectRatio: artworkRatio }}>
                         <Image
-                          src={showOriginal && photoUrl ? photoUrl : sketchUrl}
-                          alt={showOriginal ? "원본 풍경" : "스케치로 바뀐 풍경"}
+                          src={showOriginal && photoUrl ? photoUrl : artworkUrl || sketchUrl}
+                          alt={showOriginal ? "원본 풍경" : `${result.title}, ${STYLE_LABELS[style]}로 만든 풍경시`}
                           fill
                           unoptimized
                           sizes="(max-width: 900px) 88vw, 52vw"
+                          onLoad={(event) => {
+                            const image = event.currentTarget;
+                            if (image.naturalHeight) setArtworkRatio(image.naturalWidth / image.naturalHeight);
+                          }}
                         />
-                        <div className="poem-paper">
+                        <div className="visually-hidden">
                           <span className="poem-kicker">풍경시</span>
                           <h4>{result.title}</h4>
                           <p>{result.poem}</p>
