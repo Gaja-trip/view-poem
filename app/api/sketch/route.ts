@@ -80,7 +80,7 @@ async function createSketch(
       getText(formData, "feeling", "emotion", "note"),
       getText(formData, "poem"),
       getText(formData, "style"),
-      getText(formData, "colorStrength") === "" ? 70 : Number(getText(formData, "colorStrength")),
+      getText(formData, "colorStrength") === "" ? 90 : Number(getText(formData, "colorStrength")),
     ),
   );
   body.append("size", "auto");

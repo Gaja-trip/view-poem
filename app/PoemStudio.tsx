@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import Script from "next/script";
+import ArtworkEditor from "./ArtworkEditor";
 import { renderSketchInWorker } from "@/lib/sketch-client";
 import type { SketchStyle } from "@/lib/sketch-renderer";
 import {
@@ -247,152 +248,6 @@ async function preparePhotoForRequest(file: File, signal: AbortSignal) {
 }
 
 
-function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number) {
-  const words = text.trim().split(/\s+/);
-  const lines: string[] = [];
-  let current = "";
-  for (const word of words) {
-    if (context.measureText(word).width > maxWidth) {
-      if (current) {
-        lines.push(current);
-        current = "";
-      }
-      let fragment = "";
-      for (const character of Array.from(word)) {
-        const candidate = `${fragment}${character}`;
-        if (fragment && context.measureText(candidate).width > maxWidth) {
-          lines.push(fragment);
-          fragment = character;
-        } else {
-          fragment = candidate;
-        }
-      }
-      current = fragment;
-      continue;
-    }
-    const candidate = current ? `${current} ${word}` : word;
-    if (current && context.measureText(candidate).width > maxWidth) {
-      lines.push(current);
-      current = word;
-    } else {
-      current = candidate;
-    }
-  }
-  if (current) lines.push(current);
-  return lines;
-}
-
-async function createArtworkBlob(
-  sketch: Blob,
-  result: PoemResult,
-  location: string,
-) {
-  const sourceImage = await loadImage(sketch);
-  const maxEdge = 1500;
-  const maxPixels = 1_900_000;
-  const sourcePixels = sourceImage.naturalWidth * sourceImage.naturalHeight;
-  const scale = Math.min(
-    1,
-    maxEdge / Math.max(sourceImage.naturalWidth, sourceImage.naturalHeight),
-    Math.sqrt(maxPixels / sourcePixels),
-  );
-  const width = Math.max(1, Math.round(sourceImage.naturalWidth * scale));
-  const height = Math.max(1, Math.round(sourceImage.naturalHeight * scale));
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("작품 파일을 만들지 못했어요.");
-
-  context.fillStyle = "#eee9dc";
-  context.fillRect(0, 0, width, height);
-  const imageRatio = sourceImage.naturalWidth / sourceImage.naturalHeight;
-  const canvasRatio = width / height;
-  let drawWidth = width;
-  let drawHeight = height;
-  let drawX = 0;
-  let drawY = 0;
-  if (imageRatio > canvasRatio) {
-    drawWidth = height * imageRatio;
-    drawX = (width - drawWidth) / 2;
-  } else {
-    drawHeight = width / imageRatio;
-    drawY = (height - drawHeight) / 2;
-  }
-  context.drawImage(sourceImage, drawX, drawY, drawWidth, drawHeight);
-
-  const panelWidth = width > height ? width * 0.49 : width * 0.84;
-  const panelHeight = height * 0.82;
-  const panelX = width > height ? width * 0.065 : width * 0.08;
-  const panelY = height * 0.09;
-  const paperWash = context.createLinearGradient(0, 0, panelX + panelWidth * 1.2, 0);
-  paperWash.addColorStop(0, "rgba(251, 249, 243, .96)");
-  paperWash.addColorStop(0.55, "rgba(251, 249, 243, .86)");
-  paperWash.addColorStop(1, "rgba(251, 249, 243, 0)");
-  context.fillStyle = paperWash;
-  context.fillRect(0, 0, panelX + panelWidth * 1.2, height);
-
-  const padding = panelWidth * 0.12;
-  const titleSize = Math.max(30, Math.min(58, panelWidth * 0.09));
-  context.fillStyle = "#293029";
-  context.textAlign = "left";
-  context.textBaseline = "top";
-  context.font = `600 ${titleSize}px "Noto Serif KR", "Nanum Myeongjo", Batang, serif`;
-  const titleLines = wrapText(context, result.title, panelWidth - padding * 2);
-  let cursorY = panelY + padding;
-  for (const line of titleLines.slice(0, 2)) {
-    context.fillText(line, panelX + padding, cursorY);
-    cursorY += titleSize * 1.24;
-  }
-
-  context.strokeStyle = "rgba(59, 89, 67, .42)";
-  context.lineWidth = 2;
-  context.beginPath();
-  context.moveTo(panelX + padding, cursorY + titleSize * 0.18);
-  context.lineTo(panelX + padding + panelWidth * 0.2, cursorY + titleSize * 0.18);
-  context.stroke();
-  cursorY += titleSize * 0.74;
-
-  let poemSize = Math.max(15, Math.min(36, panelWidth * 0.052));
-  context.fillStyle = "#353a35";
-  let poemLines: string[] = [];
-  let lineHeight = poemSize * 1.72;
-  let availableLines = 4;
-  do {
-    context.font = `400 ${poemSize}px "Noto Serif KR", "Nanum Myeongjo", Batang, serif`;
-    lineHeight = poemSize * 1.72;
-    poemLines = result.poem.split("\n").flatMap((line) =>
-      wrapText(context, line || " ", panelWidth - padding * 2),
-    );
-    availableLines = Math.max(
-      4,
-      Math.floor((panelY + panelHeight - padding * 1.35 - cursorY) / lineHeight),
-    );
-    if (poemLines.length <= availableLines || poemSize <= 15) break;
-    poemSize -= 1;
-  } while (poemSize >= 15);
-
-  const visiblePoemLines = poemLines.slice(0, availableLines);
-  if (poemLines.length > availableLines && visiblePoemLines.length > 0) {
-    const lastIndex = visiblePoemLines.length - 1;
-    visiblePoemLines[lastIndex] = `${visiblePoemLines[lastIndex].replace(/…?$/, "")}…`;
-  }
-  for (const line of visiblePoemLines) {
-    context.fillText(line, panelX + padding, cursorY);
-    cursorY += lineHeight;
-  }
-
-  context.font = `500 ${Math.max(15, poemSize * 0.53)}px system-ui, sans-serif`;
-  context.fillStyle = "rgba(45, 57, 46, .68)";
-  context.fillText(location.trim() ? `풍경시 · ${location.trim()}` : "풍경시 · 오늘의 산책", panelX + padding, panelY + panelHeight - padding * 0.58);
-
-  const artwork = await blobFromCanvas(canvas);
-  canvas.width = 0;
-  canvas.height = 0;
-  sourceImage.src = "";
-  return artwork;
-}
-
 function downloadBlob(blob: Blob, fileName: string) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -630,11 +485,10 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   const [emotion, setEmotion] = useState("");
   const [location, setLocation] = useState("");
   const [style, setStyle] = useState<SketchStyle>("watercolor");
-  const [colorStrength, setColorStrength] = useState(70);
+  const [colorStrength, setColorStrength] = useState(90);
   const [previewSketch, setPreviewSketch] = useState<Blob | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewError, setPreviewError] = useState("");
-  const [artworkRatio, setArtworkRatio] = useState(4 / 3);
   const [sketchSource, setSketchSource] = useState<"openai" | "local">("local");
   const [length, setLength] = useState<PoemLength>("medium");
   const [result, setResult] = useState<PoemResult | null>(null);
@@ -661,7 +515,6 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
   const importedImageUrl = useObjectUrl(importedImage);
   const sketchUrl = useObjectUrl(sketchBlob);
   const previewSketchUrl = useObjectUrl(previewSketch);
-  const artworkUrl = useObjectUrl(artworkBlob);
   const googleScriptsReady = identityLoaded && pickerScriptLoaded;
 
   useEffect(() => {
@@ -772,12 +625,10 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
         requestSketch(requestPhoto, feeling.trim() || emotion, style, colorStrength, controller.signal),
       ]);
       if (controller.signal.aborted || generationId !== generationIdRef.current) return;
-      const nextArtwork = await createArtworkBlob(nextSketch.blob, nextPoem, location);
-      if (controller.signal.aborted || generationId !== generationIdRef.current) return;
       setResult(nextPoem);
       setSketchBlob(nextSketch.blob);
       setSketchSource(nextSketch.source);
-      setArtworkBlob(nextArtwork);
+      setArtworkBlob(null);
       setShowOriginal(false);
       setStep(3);
     } catch (generationError) {
@@ -1149,25 +1000,15 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                       </p>
                     </div>
                     <div className="artwork-card">
-                      <div className="artwork-image" style={{ aspectRatio: artworkRatio }}>
-                        <Image
-                          src={showOriginal && photoUrl ? photoUrl : artworkUrl || sketchUrl}
-                          alt={showOriginal ? "원본 풍경" : `${result.title}, ${STYLE_LABELS[style]}로 만든 풍경시`}
-                          fill
-                          unoptimized
-                          sizes="(max-width: 900px) 88vw, 52vw"
-                          onLoad={(event) => {
-                            const image = event.currentTarget;
-                            if (image.naturalHeight) setArtworkRatio(image.naturalWidth / image.naturalHeight);
-                          }}
-                        />
-                        <div className="visually-hidden">
-                          <span className="poem-kicker">풍경시</span>
-                          <h4>{result.title}</h4>
-                          <p>{result.poem}</p>
-                          <small>{location.trim() || "오늘의 산책"}</small>
-                        </div>
-                      </div>
+                      <ArtworkEditor
+                        key={sketchUrl}
+                        sketchUrl={sketchUrl}
+                        originalUrl={photoUrl || ""}
+                        showOriginal={showOriginal}
+                        text={{ title: result.title, poem: result.poem, location }}
+                        onTextChange={(text) => setResult((current) => current ? { ...current, ...text } : current)}
+                        onArtworkReady={setArtworkBlob}
+                      />
                       <div className="result-tools">
                         <button type="button" onClick={() => setShowOriginal((current) => !current)}>
                           {showOriginal ? "스케치 보기" : "원본과 비교"}
@@ -1179,10 +1020,10 @@ export default function PoemStudio({ mode }: { mode: Mode }) {
                     <div className="save-panel">
                       <p className="save-eyebrow">SAVE YOUR MOMENT</p>
                       <h4>이 순간을 오래 보관해요.</h4>
-                      <button className="button button-primary button-full" type="button" onClick={downloadArtwork}>
+                      <button className="button button-primary button-full" type="button" onClick={downloadArtwork} disabled={!artworkBlob || isGenerating}>
                         완성 작품 다운로드 <span aria-hidden="true">↓</span>
                       </button>
-                      <button className="button button-drive button-full" type="button" onClick={() => artworkBlob && saveToDrive(artworkBlob, safeFileName(result.title))} disabled={driveState === "connecting" || driveState === "saving"}>
+                      <button className="button button-drive button-full" type="button" onClick={() => artworkBlob && saveToDrive(artworkBlob, safeFileName(result.title))} disabled={!artworkBlob || isGenerating || driveState === "connecting" || driveState === "saving"}>
                         {driveState === "connecting" || driveState === "saving" ? "Google Drive 저장 중…" : "Google Drive에 저장"}
                       </button>
                       <button className="text-button" type="button" onClick={downloadSketch}>스케치 이미지만 받기</button>

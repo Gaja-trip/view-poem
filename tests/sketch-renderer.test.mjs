@@ -49,6 +49,15 @@ test("handles transparent photos, tiny dimensions and all retained styles", asyn
   }
 });
 
+test("default watercolor retains distinct blue/green pigment and depth, instead of a gray whitewash", async () => {
+  const result = await renderSketchPixels(source, width, height, { style: "watercolor", colorStrength: 90 });
+  const blue = Array.from(result.slice((45 * width + 30) * 4, (45 * width + 30) * 4 + 3));
+  const green = Array.from(result.slice((45 * width + 90) * 4, (45 * width + 90) * 4 + 3));
+  assert.ok(blue[2] - blue[0] > 90, `Blue pigment too gray: ${blue}`);
+  assert.ok(green[1] - green[2] > 50, `Green pigment too gray: ${green}`);
+  assert.ok(Math.min(...green) < 120, `Shadows too washed out: ${green}`);
+});
+
 test("cooperative recovery can cancel before publishing a stale preview", async () => {
   const controller = new AbortController();
   let yields = 0;

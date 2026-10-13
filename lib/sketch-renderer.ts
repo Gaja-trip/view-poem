@@ -45,6 +45,7 @@ export async function renderSketchPixels(
   const colored = options.style === "watercolor" && options.colorStrength > 0;
   const strength = clamp(options.colorStrength, 0, 100) / 100;
   const count = width * height;
+  const gray = new Uint8Array(count);
   let colors = new Uint32Array(count);
   for (let i = 0; i < count; i++) {
     const p = i * 4, alpha = rgba[p + 3] / 255;
@@ -52,18 +53,20 @@ export async function renderSketchPixels(
     const g = Math.round(rgba[p + 1] * alpha + 255 * (1 - alpha));
     const b = Math.round(rgba[p + 2] * alpha + 255 * (1 - alpha));
     colors[i] = (r << 16) | (g << 8) | b;
+    gray[i] = luminance(colors[i]);
   }
   const weights = new Float32Array(256);
   for (let i = 0; i < 256; i++) weights[i] = 1 / (1 + (i / 24) ** 2);
   let next = new Uint32Array(count);
-  for (let pass = 0; pass < (colored ? 4 : 2); pass++) {
+  for (let pass = 0; pass < (colored ? 6 : 2); pass++) {
+    const brush = colored ? Math.max(1, Math.round(Math.min(width, height) / 270)) : 1;
     for (let y = 0; y < height; y++) {
       if (yieldTurn && (y & 31) === 0) await yieldTurn();
-      const up = Math.max(0, y - 1) * width, down = Math.min(height - 1, y + 1) * width;
+      const up = Math.max(0, y - brush) * width, down = Math.min(height - 1, y + brush) * width;
       for (let x = 0; x < width; x++) {
         const i = y * width + x, center = colors[i];
-        const l = colors[y * width + Math.max(0, x - 1)];
-        const r = colors[y * width + Math.min(width - 1, x + 1)];
+        const l = colors[y * width + Math.max(0, x - brush)];
+        const r = colors[y * width + Math.min(width - 1, x + brush)];
         const t = colors[up + x], b = colors[down + x];
         const weight = (color: number) => weights[Math.floor((Math.abs(red(center) - red(color))
           + Math.abs(green(center) - green(color)) + Math.abs(blue(center) - blue(color))) / 3)];
@@ -77,8 +80,8 @@ export async function renderSketchPixels(
     }
     [colors, next] = [next, colors];
   }
-  const gray = new Uint8Array(count);
-  for (let i = 0; i < count; i++) gray[i] = luminance(colors[i]);
+  // Pencil detail comes from the sharp original, not the softened color wash.
+  if (!colored) for (let i = 0; i < count; i++) gray[i] = luminance(colors[i]);
   const radius = Math.max(3, Math.min(14, Math.floor(Math.min(width, height) / 65)));
   const window = radius * 2 + 1;
   const horizontal = new Uint8Array(count), blurred = new Uint8Array(count);
@@ -103,9 +106,9 @@ export async function renderSketchPixels(
     }
   }
   const lifted = new Float32Array(256);
-  for (let i = 0; i < 256; i++) lifted[i] = 255 * (i / 255) ** 0.72;
+  for (let i = 0; i < 256; i++) lifted[i] = 255 * (i / 255) ** 0.9;
   const output = new Uint8ClampedArray(rgba.length);
-  const margin = Math.max(1, Math.min(width, height) * 0.035);
+  const margin = Math.max(1, Math.min(width, height) * (colored ? 0.006 : 0.035));
   const strokeScale = Math.max(0.65, Math.min(width, height) / 700);
   for (let y = 0; y < height; y++) {
     if (yieldTurn && (y & 31) === 0) await yieldTurn();
@@ -120,7 +123,7 @@ export async function renderSketchPixels(
           + gray[i + width - 1] + 2 * gray[i + width] + gray[i + width + 1];
         edge = clamp(((Math.abs(gx) + Math.abs(gy)) / 8 - 5) / 65, 0, 1);
       }
-      const line = Math.min(0.75, (1 - dodge) * 0.82 + edge * 0.26);
+      const line = Math.min(0.75, (1 - dodge) * (colored ? 0.95 : 0.82) + edge * (colored ? 0.6 : 0.26));
       const texture = noise(x, y) * 1.8 + noise(Math.floor(x / 3), Math.floor(y / 2)) * 0.8;
       const shading = hatch(x / strokeScale, y / strokeScale, shadow);
       const border = smoothstep(Math.min(x, y, width - 1 - x, height - 1 - y) / margin);
@@ -128,13 +131,15 @@ export async function renderSketchPixels(
       if (colored) {
         const lr = lifted[red(colors[i])], lg = lifted[green(colors[i])], lb = lifted[blue(colors[i])];
         const neutral = (77 * lr + 150 * lg + 29 * lb) / 256;
-        const wash = strength * (0.82 + pigmentNoise(x, y) * 0.035);
-        const graphite = Math.min(0.58, line * 0.74 + shadow ** 2 * 0.045 + shading * 0.028);
+        // Keep chromatic shadows: a gray underpainting makes the whole scene muddy.
+        const wash = strength * (0.96 + pigmentNoise(x, y) * 0.08);
+        const graphite = Math.min(0.4, line * 0.8 + shading * 0.04);
         const channel = (color: number, paper: number) => {
-          let pigment = neutral + (color - neutral) * 0.78;
-          pigment = pigment * 0.8 + Math.round(pigment / 12) * 12 * 0.2;
+          let pigment = clamp(neutral + (color - neutral) * 1.24);
+          pigment = pigment * 0.55 + Math.round(pigment / 24) * 24 * 0.45;
           const value = (paper + (pigment - paper) * wash) * (1 - graphite) + texture;
-          return clamp(Math.round(paper + (value - paper) * border));
+          // Only a fine paper edge, not a white fog across the photograph.
+          return clamp(Math.round(paper + (value - paper) * (0.9 + border * 0.1)));
         };
         output[p] = channel(lr, 251); output[p + 1] = channel(lg, 249); output[p + 2] = channel(lb, 244);
       } else {
